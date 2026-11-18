@@ -1,12 +1,12 @@
-// Token Radar — model radar-2.
+// Token Radar — model radar-3.
 //
-// The board covers every slug in the snapshot's watchlist (the floor, never a
-// ceiling) and every other rankable pre-token protocol the snapshot carries:
-// 198 rows in this snapshot, so the radar finds early protocols below the
-// floor instead of stopping at it. A protocol is pre-token when its record
-// carries no token (no market cap, no CoinGecko id, no symbol); live-token
-// protocols are kept apart and shown with their market cap, never mixed into
-// the ranked board.
+// The board ranks every pre-token protocol the snapshot carries: the 40
+// watchlist slugs are the floor, and every other rankable pre-token
+// protocol joins them, so the radar finds launches below the floor instead
+// of stopping at it. A protocol is pre-token when its record carries no
+// token (no market cap, no CoinGecko id, no symbol); live-token protocols
+// are kept apart and shown with their market cap, never mixed into the
+// ranked board.
 //
 // Implied value follows only from the snapshot's own figures:
 //
@@ -21,11 +21,20 @@
 // The dashboard recomputes every row with the same function and shows the
 // breakdown, so the page, board.json and this file always agree.
 //
+// Heat is a second, separate signal — how hot a launch looks right now.
+// It is also computed only from the snapshot, never from a list of names:
+// how fast the protocol grows against its own category's median, how young
+// it is, how big it is against the watchlist floor, how many chains it runs
+// on, and whether its growth is strong in absolute terms. Heat never moves
+// the implied value or the rank; it is the radar's early-warning view, and
+// the dashboard's early strip sorts by it.
+//
 // Risk is a separate, honest signal. The snapshot carries no contract audit,
 // no honeypot test and no holder data, so this radar never claims to detect a
 // honeypot or a rug. The risk score (0-100) is only a heuristic over what the
-// snapshot does carry — a falling TVL, a very young listing, a single chain,
-// a small TVL — and the dashboard labels it exactly that way.
+// snapshot does carry — a falling TVL, growth far below its category, a very
+// young listing, a single chain, a small TVL — and the dashboard labels it
+// exactly that way.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -78,10 +87,13 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
+
+/** How many categories the dashboard's momentum table carries. */
+export const CATEGORY_ROWS = 12;
 
 /** A farm step: the action, what it costs, and how long it takes. */
 export interface FarmStep {
@@ -110,6 +122,9 @@ export interface BoardRow {
   risk_score: number;
   risk_band: 'Low' | 'Medium' | 'High';
   risk_flags: string[];
+  heat_score: number;
+  heat_band: 'Hot' | 'Warm' | 'Cool' | 'Cold';
+  category_median_growth: number | null;
   model: {
     base_multiple: number;
     growth_pct: number;
@@ -140,6 +155,9 @@ export interface RadarRow {
   risk_score: number;
   risk_band: 'Low' | 'Medium' | 'High';
   risk_flags: string[];
+  heat_score: number;
+  heat_band: 'Hot' | 'Warm' | 'Cool' | 'Cold';
+  category_median_growth: number | null;
   watchlist: boolean;
 }
 
@@ -152,6 +170,16 @@ export interface LiveRow {
   tvl_usd: number;
   mcap_usd: number | null;
   change_7d: number | null;
+}
+
+/** One category's momentum: what the dashboard's momentum table shows. */
+export interface CategoryStat {
+  category: string;
+  protocols: number;
+  median_growth: number | null;
+  total_implied_usd: number;
+  top_slug: string;
+  top_name: string;
 }
 
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
@@ -167,6 +195,7 @@ export interface RadarData {
   live_size: number;
   rows: RadarRow[];
   live: LiveRow[];
+  categories: CategoryStat[];
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -193,6 +222,14 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
+/** The median of a list of numbers, or null when it holds none. */
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
 /** The multipliers and the implied value one protocol gets under `model`. */
 export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): { implied: number; growthPct: number; growthMult: number; maturityMult: number; breadthMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
@@ -209,24 +246,58 @@ export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: Mo
 }
 
 /**
- * Risk, 0-100, from the snapshot alone — never a honeypot or rug verdict.
- * Drawdown: growth below -20 adds 30, below -5 adds 15. Youth: listed under
- * 90 days adds 25, under 180 adds 15, unknown age adds 10. Single chain adds
- * 10. TVL under $10M adds 10. Strong growth (over +20%) subtracts 10.
+ * Heat, 0-100: how hot a launch looks right now, from the snapshot alone.
+ * Growth against its own category's median is worth up to 40 (a protocol
+ * growing while its category shrinks is heating up); youth up to 20 (a
+ * young listing is an earlier find); size against the watchlist floor up
+ * to 15; chain breadth up to 10; strong absolute growth up to 15. Heat
+ * never changes the implied value or the rank — it is the early-warning
+ * view, and the early strip sorts by it.
  */
-export function riskScore(protocol: SnapshotProtocol, asOf: string): { score: number; band: 'Low' | 'Medium' | 'High'; flags: string[] } {
+export function heatScore(protocol: SnapshotProtocol, asOf: string, categoryMedian: number | null, floorUsd: number): { score: number; band: 'Hot' | 'Warm' | 'Cool' | 'Cold' } {
+  const growth = protocol.change_7d;
+  const medianGrowth = categoryMedian ?? 0;
+  const diff = growth === null ? 0 : growth - medianGrowth;
+  const vsCategory = (40 * (Math.min(60, Math.max(-30, diff)) + 30)) / 90;
+  const age = ageDays(asOf, protocol.listed_at);
+  const youth = age === null ? 10 : 20 * (1 - Math.min(age, 730) / 730);
+  const scale = 15 * Math.min(protocol.tvl_usd / floorUsd, 1);
+  const breadth = (10 * Math.min(Math.max(protocol.chains.length - 1, 0), 4)) / 4;
+  const absolute = growth === null ? 0 : growth > 25 ? 15 : growth > 10 ? 10 : growth > 0 ? 5 : 0;
+  const score = Math.min(100, Math.max(0, Math.round(vsCategory + youth + scale + breadth + absolute)));
+  const band = score >= 70 ? 'Hot' : score >= 45 ? 'Warm' : score >= 20 ? 'Cool' : 'Cold';
+  return { score, band };
+}
+
+/**
+ * Risk, 0-100, from the snapshot alone — never a honeypot or rug verdict.
+ * Drawdown: growth below -20 adds 30, below -5 adds 15. Growth far below
+ * its own category's median adds 10. Youth: listed under 90 days adds 25,
+ * under 180 adds 15, unknown age adds 10. Single chain adds 10. TVL under
+ * $10M adds 10. Holding most of its category's TVL adds 5. Strong growth
+ * (over +20%) subtracts 10. No growth reported adds 5.
+ */
+export function riskScore(protocol: SnapshotProtocol, asOf: string, context?: { categoryMedian: number | null; categoryShare: number }): { score: number; band: 'Low' | 'Medium' | 'High'; flags: string[] } {
   const flags: string[] = [];
   let score = 0;
   const growth = protocol.change_7d;
   if (growth !== null && growth < -20) { score += 30; flags.push(`TVL down ${growth.toFixed(1)}% in 7 days`); }
   else if (growth !== null && growth < -5) { score += 15; flags.push(`TVL down ${growth.toFixed(1)}% in 7 days`); }
   if (growth !== null && growth > 20) score -= 10;
+  if (growth === null) { score += 5; flags.push('No 7-day growth reported in the snapshot'); }
+  const medianGrowth = context?.categoryMedian ?? null;
+  if (growth !== null && medianGrowth !== null && growth - medianGrowth < -15) {
+    score += 10;
+    flags.push(`Growing ${(growth - medianGrowth).toFixed(1)} points slower than its ${(protocol.category ?? 'category')} median`);
+  }
   const age = ageDays(asOf, protocol.listed_at);
   if (age === null) { score += 10; flags.push('Listing date unknown — age cannot be checked'); }
   else if (age < 90) { score += 25; flags.push(`Listed only ${age} days ago`); }
   else if (age < 180) { score += 15; flags.push(`Listed only ${age} days ago`); }
   if (protocol.chains.length <= 1) { score += 10; flags.push('Runs on a single chain'); }
   if (protocol.tvl_usd < 10_000_000) { score += 10; flags.push('TVL under $10M — thin liquidity'); }
+  const share = context?.categoryShare ?? 0;
+  if (share > 0.5) { score += 5; flags.push(`Holds ${Math.round(share * 100)}% of its category's TVL — one name carries the corner`); }
   score = Math.min(100, Math.max(0, score));
   const band = score >= 50 ? 'High' : score >= 30 ? 'Medium' : 'Low';
   if (flags.length === 0) flags.push('No risk flag in the snapshot figures');
@@ -270,9 +341,30 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
   return new Map(protocols.map((p) => [p.slug, p]));
 }
 
+/** Per-category figures from the snapshot itself: median growth and total TVL. */
+function categoryFigures(snapshot: Snapshot): Map<string, { medianGrowth: number | null; totalTvl: number }> {
+  const byCategory = new Map<string, SnapshotProtocol[]>();
+  for (const p of snapshot.protocols) {
+    const key = p.category ?? 'Other';
+    const list = byCategory.get(key) ?? [];
+    list.push(p);
+    byCategory.set(key, list);
+  }
+  const figures = new Map<string, { medianGrowth: number | null; totalTvl: number }>();
+  for (const [key, list] of byCategory) {
+    const growths = list.map((p) => p.change_7d).filter((g): g is number => g !== null);
+    figures.set(key, {
+      medianGrowth: median(growths),
+      totalTvl: list.reduce((s, p) => s + p.tvl_usd, 0),
+    });
+  }
+  return figures;
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const index = bySlug(snapshot.protocols);
+  const figures = categoryFigures(snapshot);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug it names is ranked.
   for (const slug of snapshot.watchlist) {
@@ -287,8 +379,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
 
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, model);
-    const r = riskScore(p, snapshot.as_of);
-    return { p, ...v, risk: r };
+    const fig = figures.get(p.category ?? 'Other') ?? { medianGrowth: null, totalTvl: 0 };
+    const share = fig.totalTvl > 0 ? p.tvl_usd / fig.totalTvl : 0;
+    const r = riskScore(p, snapshot.as_of, { categoryMedian: fig.medianGrowth, categoryShare: share });
+    const h = heatScore(p, snapshot.as_of, fig.medianGrowth, snapshot.floor_usd);
+    return { p, ...v, risk: r, heat: h, medianGrowth: fig.medianGrowth };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const watch = new Set(snapshot.watchlist);
@@ -311,6 +406,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     risk_score: s.risk.score,
     risk_band: s.risk.band,
     risk_flags: s.risk.flags,
+    heat_score: s.heat.score,
+    heat_band: s.heat.band,
+    category_median_growth: s.medianGrowth,
     model: {
       base_multiple: model.base_multiple,
       growth_pct: s.growthPct,
@@ -373,15 +471,18 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
 }
 
 /**
- * A protocol's farm plan: six steps, each an action with a cost and a time.
+ * A protocol's farm plan: eight steps, each an action with a cost and a time.
  * The plan is derived from the protocol's own record (category, chains, TVL
- * and age), never from a hand-written list of names.
+ * and age), never from a hand-written list of names. Multi-chain protocols
+ * get a repeat step on their second chain; every plan ends with an exit
+ * decided in advance, before any token launches.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
-  return [
+  const secondChain = p.chains.length > 1 ? p.chains[1]! : null;
+  const steps: FarmStep[] = [
     {
       text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
       cost: 'under $3 of gas for the first transaction',
@@ -413,6 +514,25 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
   ];
+  if (secondChain !== null) {
+    steps.push({
+      text: `Repeat the position on ${secondChain} as well, so the farm qualifies on both chains instead of one.`,
+      cost: `the same $${capital} bridged over, about $5 of gas`,
+      time: '20 minutes',
+    });
+  } else {
+    steps.push({
+      text: `Join the protocol's community channel and watch for points, testnet or snapshot announcements.`,
+      cost: 'nothing to join',
+      time: '10 minutes a week',
+    });
+  }
+  steps.push({
+    text: `Decide the exit before the token launches: what share to sell at launch and what to keep staked or in the pool.`,
+    cost: 'nothing to decide now',
+    time: '10 minutes',
+  });
+  return steps;
 }
 
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
@@ -452,8 +572,37 @@ export function radarRow(row: BoardRow): RadarRow {
     risk_score: row.risk_score,
     risk_band: row.risk_band,
     risk_flags: row.risk_flags,
+    heat_score: row.heat_score,
+    heat_band: row.heat_band,
+    category_median_growth: row.category_median_growth,
     watchlist: row.watchlist,
   };
+}
+
+/** One category's momentum, from the board's own rows: median growth, size, and its strongest row. */
+export function categoryStats(board: BoardRow[]): CategoryStat[] {
+  const byCategory = new Map<string, BoardRow[]>();
+  for (const row of board) {
+    const key = row.category ?? 'Other';
+    const list = byCategory.get(key) ?? [];
+    list.push(row);
+    byCategory.set(key, list);
+  }
+  const stats: CategoryStat[] = [];
+  for (const [category, rows] of byCategory) {
+    const growths = rows.map((r) => r.change_7d).filter((g): g is number => g !== null);
+    const top = rows.reduce((best, r) => (r.implied_value_usd > best.implied_value_usd ? r : best), rows[0]!);
+    stats.push({
+      category,
+      protocols: rows.length,
+      median_growth: median(growths),
+      total_implied_usd: rows.reduce((s, r) => s + r.implied_value_usd, 0),
+      top_slug: top.slug,
+      top_name: top.name,
+    });
+  }
+  stats.sort((a, b) => b.total_implied_usd - a.total_implied_usd);
+  return stats.slice(0, CATEGORY_ROWS);
 }
 
 /** Everything the dashboard renders, from the snapshot. */
@@ -473,6 +622,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     rows: board.map(radarRow),
     live,
+    categories: categoryStats(board),
   };
   return { board, radar };
 }

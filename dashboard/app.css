@@ -1,4 +1,5 @@
-/* Token Radar — dark radar-room palette: deep navy, teal signal, amber value. */
+/* Token Radar — a dark radar room: deep navy, teal signal, amber value,
+   heat in red and orange. One palette, one radius, one type scale. */
 :root {
   --bg: #0a1120; --panel: #101a2e; --panel2: #0d1526; --line: #22304d;
   --text: #e7eefb; --muted: #93a5c2; --faint: #6b7d9c;
@@ -14,19 +15,40 @@ a { color: var(--teal); }
 .skip:focus { left: 8px; top: 8px; }
 .noscript { max-width: 720px; margin: 40px auto; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); }
 .shell { max-width: 1180px; margin: 0 auto; padding: 0 20px 48px; }
+
+/* Header */
 .top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 0 6px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 22px; letter-spacing: .2px; }
 .mark { width: 14px; height: 14px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 5px rgba(45, 212, 191, .18), 0 0 18px rgba(45, 212, 191, .7); }
 .top-meta { display: flex; flex-wrap: wrap; gap: 8px; }
 .top-meta span { font-size: 12.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: var(--panel2); }
+
+/* Lede and fact cards */
 .lede { padding: 14px 0 4px; }
-.lede h1 { font-size: 30px; line-height: 1.15; margin: 6px 0 8px; max-width: 760px; }
-.lede p { color: var(--muted); max-width: 780px; margin: 0; }
+.lede h1 { font-size: 30px; line-height: 1.15; margin: 6px 0 8px; max-width: 780px; }
+.lede p { color: var(--muted); max-width: 820px; margin: 0; }
 .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 18px 0 4px; }
 .fact { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
 .fact span { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 .fact b { font-size: 22px; font-weight: 800; }
 .fact small { display: block; color: var(--faint); font-size: 12px; }
+
+/* Early radar strip */
+.early { margin-top: 14px; }
+.early-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
+.early-card { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; background: var(--panel2); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; cursor: pointer; color: var(--text); font: inherit; }
+.early-card:hover { border-color: var(--teal); }
+.early-card b { font-size: 14.5px; }
+.early-card .sub { color: var(--muted); font-size: 12.5px; }
+
+/* Heat badges: hot is red, warm orange, cool teal, cold faint. */
+.heat { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 8px; white-space: nowrap; }
+.heat.hot { color: #fecaca; background: #7f1d1d; }
+.heat.warm { color: #ffedd5; background: #7c2d12; }
+.heat.cool { color: #99f6e4; background: #134e4a; }
+.heat.cold { color: var(--muted); background: #1a2742; }
+
+/* Charts */
 .charts { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 10px; margin: 14px 0; }
 .chart { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
 .chart h2, .panel h2 { font-size: 15px; margin: 0 0 4px; }
@@ -41,11 +63,22 @@ a { color: var(--teal); }
 .hist div { flex: 1; background: var(--teal); border-radius: 3px 3px 0 0; min-height: 2px; opacity: .85; }
 .hist-labels { display: flex; gap: 4px; font-size: 11px; color: var(--faint); }
 .hist-labels span { flex: 1; text-align: center; }
+.hist-counts { color: var(--muted); font-size: 12px; margin: 8px 0 0; line-height: 1.7; }
+
+/* Category momentum table */
+.cat-table tbody tr { cursor: pointer; }
+.cat-table td b { font-size: 14px; }
+.linklike { background: none; border: 0; padding: 0; color: var(--teal); font: inherit; font-size: 13.5px; cursor: pointer; text-align: left; }
+.linklike:hover { text-decoration: underline; }
+
+/* Fastest growers strip */
 .movers { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 14px; }
 .mover { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; color: var(--text); }
 .mover:hover { border-color: var(--teal); }
 .mover b { color: var(--green); }
 .movers-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; align-self: center; margin-right: 2px; }
+
+/* Controls */
 .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin: 6px 0 12px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label, .field .sub { font-size: 12px; color: var(--muted); }
@@ -57,6 +90,8 @@ a { color: var(--teal); }
 .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); padding-bottom: 8px; }
 .check input { accent-color: var(--teal); width: 16px; height: 16px; }
 .count { margin-left: auto; font-size: 13px; color: var(--muted); align-self: center; }
+
+/* Panels and tables */
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -85,12 +120,16 @@ td.num, th.num { text-align: right; }
 .pager button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; }
 .pager button:disabled { opacity: .4; cursor: default; }
 .pager select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px; font: inherit; }
+
+/* Model panel and sandbox */
 .formula { font-family: var(--mono); font-size: 12.5px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-x: auto; white-space: nowrap; }
 .sandbox { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
 .sandbox label { display: block; font-size: 13px; margin-bottom: 4px; }
 .sandbox output { font-family: var(--mono); color: var(--teal); }
 .sandbox input[type="range"] { width: 100%; accent-color: var(--teal); }
 .sandbox-note { font-size: 13px; color: var(--amber); margin: 10px 0 0; }
+
+/* Detail dialog */
 .detail { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; max-width: 680px; width: calc(100% - 32px); padding: 0; }
 .detail::backdrop { background: rgba(2, 6, 18, .75); }
 .detail-head { display: flex; justify-content: space-between; gap: 12px; padding: 20px 22px 0; }
@@ -108,9 +147,11 @@ td.num, th.num { text-align: right; }
 .method { font-size: 13.5px; color: var(--muted); }
 .method b { color: var(--text); }
 footer { color: var(--faint); font-size: 12.5px; padding: 8px 2px; }
+
 @media (max-width: 900px) {
   .facts { grid-template-columns: repeat(2, 1fr); }
   .charts { grid-template-columns: 1fr; }
+  .early-grid { grid-template-columns: repeat(2, 1fr); }
   .sandbox { grid-template-columns: 1fr; }
   .lede h1 { font-size: 24px; }
   .field input[type="search"] { width: 100%; }

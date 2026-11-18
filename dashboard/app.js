@@ -1,12 +1,13 @@
-// Token Radar radar-2. Reads window.RADAR (written beside dashboard/ by main.ts)
-// and renders the ranked board, charts, filters, a per-protocol detail view and
-// a model sandbox. No network: every byte it shows is in data.js.
+// Token Radar radar-3. Reads window.RADAR (written beside dashboard/ by
+// main.ts) and renders the ranked board, the early radar, category
+// momentum, charts, filters, a per-protocol detail view and a model
+// sandbox. No network: every byte it shows is in data.js.
 (function () {
   'use strict';
   var DATA = window.RADAR;
   if (!DATA) return;
   var app = document.getElementById('board');
-  var state = { q: '', category: 'all', chain: 'all', tab: 'pre-token', sort: 'implied', dir: -1, selected: null, watchOnly: false, growth: 'all', minTvl: 0, page: 1, pageSize: 50, sandbox: false, base: DATA.model.base_multiple, gw: DATA.model.growth_weight };
+  var state = { q: '', category: 'all', chain: 'all', tab: 'pre-token', sort: 'implied', dir: -1, selected: null, watchOnly: false, growth: 'all', heat: 'all', minTvl: 0, page: 1, pageSize: 50, sandbox: false, base: DATA.model.base_multiple, gw: DATA.model.growth_weight };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function fmtUsd(n) {
@@ -17,11 +18,13 @@
     return usd.format(n);
   }
   function fmtPct(n) { if (n === null || n === undefined || !isFinite(n)) return 'n/a'; return (n > 0 ? '+' : '') + n.toFixed(2) + '%'; }
+  function fmtSigned(n, digits) { if (n === null || n === undefined || !isFinite(n)) return 'n/a'; return (n > 0 ? '+' : '') + n.toFixed(digits === undefined ? 1 : digits) + ' pts'; }
   function fmtAge(d) { if (d === null || d === undefined) return 'unknown'; if (d >= 365) return (d / 365).toFixed(1) + 'y'; return Math.max(0, Math.round(d)) + 'd'; }
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
 
-  // impliedOf: the model in one function — the same arithmetic main.ts writes
-  // to board.json, so the page can check it and the sandbox can replay it.
+  // impliedOf: the model in one function — the same arithmetic main.ts
+  // writes to board.json, so the page can check a row and the sandbox can
+  // replay the whole ranking with different weights.
   function modelOf() { return state.sandbox ? { base_multiple: state.base, growth_weight: state.gw, growth_floor: DATA.model.growth_floor, growth_cap: DATA.model.growth_cap, maturity_floor: DATA.model.maturity_floor, maturity_range: DATA.model.maturity_range, maturity_days: DATA.model.maturity_days, unknown_age_days: DATA.model.unknown_age_days, breadth_per_chain: DATA.model.breadth_per_chain, breadth_max_chains: DATA.model.breadth_max_chains } : DATA.model; }
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
@@ -30,6 +33,18 @@
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
     var breadth = 1 + Math.min(Math.max((row.chains || []).length - 1, 0), model.breadth_max_chains) * model.breadth_per_chain;
     return { implied: Math.max(1, Math.round(row.tvl_usd * model.base_multiple * growthMult * maturity * breadth)), growthMult: growthMult, maturity: maturity, breadth: breadth };
+  }
+
+  // heatOf: the early-warning view — how a row's growth stands against its
+  // own category's median. The score itself comes from data.js; this is
+  // only its reading, so the strip, the table and the detail view agree.
+  function heatDiff(row) {
+    if (row.change_7d === null || row.change_7d === undefined || row.category_median_growth === null || row.category_median_growth === undefined) return null;
+    return row.change_7d - row.category_median_growth;
+  }
+  function heatClass(row) {
+    if (!row.heat_band) return '';
+    return row.heat_band === 'Hot' ? 'hot' : row.heat_band === 'Warm' ? 'warm' : row.heat_band === 'Cool' ? 'cool' : 'cold';
   }
 
   function el(tag, attrs) {
@@ -53,7 +68,8 @@
 
   // Farm plan: the same derivation main.ts writes to board.json — category,
   // chains, TVL and age decide the action, the capital, the hold and every
-  // cost and time. No name is special-cased.
+  // cost and time. No name is special-cased, so the detail view and the
+  // board's farm_steps always say the same thing.
   function chainOf(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
   function capitalFor(p) { if (p.tvl_usd >= 5e9) return 250; if (p.tvl_usd >= 1e9) return 150; if (p.tvl_usd >= 1e8) return 100; return 50; }
   function holdDaysFor(age) { if (age === null || age === undefined) return 30; if (age < 180) return 60; if (age < 365) return 45; return 30; }
@@ -75,14 +91,22 @@
   function stepText(step) { var s = step.text + ' Cost: ' + step.cost + '. Time: ' + step.time + '.'; if (s.length > 600) s = s.slice(0, 596) + '...'; if (s.length < 20) s = s + " Hold the position and check the protocol's own page."; return s; }
   function farmSteps(p) {
     var chain = chainOf(p); var capital = capitalFor(p); var hold = holdDaysFor(p.age_days);
-    return [
+    var steps = [
       { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
       { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
       { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
       { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
       { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
-    ].map(stepText);
+    ];
+    if (p.chains && p.chains.length > 1) steps.push({ text: 'Repeat the position on ' + p.chains[1] + ' as well, so the farm qualifies on both chains instead of one.', cost: 'the same $' + capital + ' bridged over, about $5 of gas', time: '20 minutes' });
+    else steps.push({ text: "Join the protocol's community channel and watch for points, testnet or snapshot announcements.", cost: 'nothing to join', time: '10 minutes a week' });
+    steps.push({ text: 'Decide the exit before the token launches: what share to sell at launch and what to keep staked or in the pool.', cost: 'nothing to decide now', time: '10 minutes' });
+    return steps.map(stepText);
+  }
+  function planTotals(p) {
+    var capital = capitalFor(p); var hold = holdDaysFor(p.age_days);
+    return 'Capital at risk $' + capital + ' · setup about 40 minutes and $' + (capital >= 150 ? 11 : 7) + ' of gas · hold at least ' + hold + ' days · about $2 of gas a week while it runs.';
   }
 
   function readHash() {
@@ -103,8 +127,8 @@
     else window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }
 
-  // Effective rows: with the sandbox off these are board.json's rows; with it
-  // on, every implied value is recomputed live and the board re-ranks.
+  // Effective rows: with the sandbox off these are board.json's rows; with
+  // it on, every implied value is recomputed live and the board re-ranks.
   function effectiveRows() {
     if (!state.sandbox) return DATA.rows;
     var m = modelOf();
@@ -121,6 +145,8 @@
       if (state.minTvl && r.tvl_usd < state.minTvl) return false;
       if (state.growth === 'up' && !(r.change_7d !== null && r.change_7d > 0)) return false;
       if (state.growth === 'down' && !(r.change_7d !== null && r.change_7d < 0)) return false;
+      if (state.heat === 'hot' && !(r.heat_score !== undefined && r.heat_score >= 70)) return false;
+      if (state.heat === 'warm' && !(r.heat_score !== undefined && r.heat_score >= 45)) return false;
       if (!q) return true;
       var hay = [r.name, r.slug, r.category, (r.chains || []).join(' ')].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;
@@ -135,6 +161,7 @@
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else if (key === 'risk') { av = a.risk_score; bv = b.risk_score; }
+      else if (key === 'heat') { av = a.heat_score === undefined ? -1 : a.heat_score; bv = b.heat_score === undefined ? -1 : b.heat_score; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -155,17 +182,40 @@
   function lede() {
     var total = DATA.rows.reduce(function (s, r) { return s + r.implied_value_usd; }, 0);
     var growers = DATA.rows.filter(function (r) { return r.change_7d !== null && r.change_7d > 0; }).length;
+    var hot = DATA.rows.filter(function (r) { return r.heat_score !== undefined && r.heat_score >= 70; }).length;
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.watchlist_size + ' watchlist protocols, ranked by implied value' }),
-        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' more pre-token protocols below that floor, at any size. Implied value is a model, not a promise — and "records no token" is what the snapshot says, never proof a token does not exist.' })),
+        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' more pre-token protocols below that floor, at any size — and heat, scored from growth against each category\u2019s median, says which of them are warming up. Implied value is a model, not a promise — and "records no token" is what the snapshot says, never proof a token does not exist.' })),
       el('div', { class: 'facts' },
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size }), el('small', { text: 'every watchlist slug is ranked' })),
         el('div', { class: 'fact' }, el('span', { text: 'Pre-token rows scored' }), el('b', { text: String(DATA.board_size) }), el('small', { text: DATA.early_size + ' of them below the floor' })),
         el('div', { class: 'fact' }, el('span', { text: 'Total implied value' }), el('b', { text: fmtUsd(total) }), el('small', { text: 'sum of the ranked board' })),
-        el('div', { class: 'fact' }, el('span', { text: 'Growing in 7 days' }), el('b', { text: growers + ' / ' + DATA.board_size }), el('small', { text: 'live-token protocols set aside: ' + DATA.live_size }))
+        el('div', { class: 'fact' }, el('span', { text: 'Heating up now' }), el('b', { text: hot + ' hot · ' + growers + ' growing' }), el('small', { text: 'heat 70+ of 100 · growers in 7 days: ' + growers + ' / ' + DATA.board_size }))
       ));
   }
+
+  // Early radar: the protocols below the watchlist floor that are heating
+  // up fastest, by heat — the launches the floor has not found yet. This
+  // is the radar's dynamic half: it is computed from the snapshot's own
+  // figures at run time, not from a list of names.
+  function earlyRadar() {
+    var early = DATA.rows.filter(function (r) { return !r.watchlist; })
+      .sort(function (a, b) { return (b.heat_score || 0) - (a.heat_score || 0) || b.implied_value_usd - a.implied_value_usd; })
+      .slice(0, 8);
+    return el('section', { class: 'panel early' },
+      el('h2', { text: 'Early radar — heating up below the floor' }),
+      el('p', { class: 'sub', text: 'Pre-token protocols under the $' + Math.round(DATA.floor_usd / 1e6) + 'M floor, ordered by heat: growth against their category\u2019s median, youth, size and breadth. Select one for its farm plan.' }),
+      el('div', { class: 'early-grid' }, early.map(function (r) {
+        var diff = heatDiff(r);
+        return el('button', { class: 'early-card', type: 'button', onclick: function () { openDetail(r.slug); } },
+          el('span', { class: 'heat ' + heatClass(r), text: (r.heat_band || '') + ' ' + (r.heat_score === undefined ? '' : r.heat_score) }),
+          el('b', { text: r.name }),
+          el('span', { class: 'sub', text: 'Rank ' + r.rank + ' · ' + fmtUsd(r.implied_value_usd) + ' implied' }),
+          el('span', { class: 'sub', text: (diff === null ? 'growth unreported' : 'growing ' + fmtSigned(diff, 1) + ' vs ' + (r.category || 'its category') + ' median') }));
+      })));
+  }
+
   function barRow(name, value, max, cls) {
     return el('div', { class: 'bar-row' },
       el('span', { class: 'nm', text: name }),
@@ -175,28 +225,49 @@
   function charts() {
     var top = DATA.rows.slice(0, 10);
     var maxTop = top.length ? top[0].implied_value_usd : 1;
-    var cats = {};
-    DATA.rows.forEach(function (r) { var c = r.category || 'Other'; cats[c] = (cats[c] || 0) + r.implied_value_usd; });
-    var catList = Object.keys(cats).map(function (k) { return { name: k, v: cats[k] }; }).sort(function (a, b) { return b.v - a.v; }).slice(0, 8);
-    var maxCat = catList.length ? catList[0].v : 1;
+    var cats = DATA.categories || [];
+    var maxCat = cats.length ? cats[0].total_implied_usd : 1;
     var buckets = [-Infinity, -20, -5, 0, 5, 20, 60, Infinity];
     var counts = [0, 0, 0, 0, 0, 0, 0];
     DATA.rows.forEach(function (r) { var g = r.change_7d === null ? 0 : r.change_7d; for (var i = 0; i < 7; i++) if (g >= buckets[i] && g < buckets[i + 1]) { counts[i]++; break; } });
     var maxC = Math.max.apply(null, counts.concat([1]));
-    var labels = ['-60..-20', '-20..-5', '-5..0', '0..5', '5..20', '20..60', '60+'];
+    var labels = ['< -20', '-20..-5', '-5..0', '0..5', '5..20', '20..60', '60+'];
     return el('section', { class: 'charts' },
       el('div', { class: 'chart' }, el('h2', { text: 'Top 10 by implied value' }),
         el('p', { class: 'sub', text: 'The head of the board — where the model puts the most value.' }),
         top.map(function (r) { return barRow(r.name, r.implied_value_usd, maxTop, ''); })),
       el('div', { class: 'chart' }, el('h2', { text: 'Implied value by category' }),
         el('p', { class: 'sub', text: 'Which corners of DeFi the pre-token value sits in.' }),
-        catList.map(function (c) { return barRow(c.name, c.v, maxCat, 'amber'); })),
+        cats.slice(0, 8).map(function (c) { return barRow(c.category, c.total_implied_usd, maxCat, 'amber'); })),
       el('div', { class: 'chart' }, el('h2', { text: '7-day growth spread' }),
         el('p', { class: 'sub', text: 'How many ranked protocols are growing, flat or shrinking.' }),
         el('div', { class: 'hist' }, counts.map(function (n) { return el('div', { style: 'height:' + Math.max(2, Math.round((n / maxC) * 100)) + '%', title: String(n) + ' protocols' }); })),
         el('div', { class: 'hist-labels' }, labels.map(function (l) { return el('span', { text: l }); })),
-        el('p', { class: 'sub', text: counts.map(function (n, i) { return labels[i] + ': ' + n; }).join('  ·  ') })));
+        el('p', { class: 'hist-counts', text: counts.map(function (n, i) { return labels[i] + ': ' + n; }).join('  ·  ') })));
   }
+
+  // Category momentum: which corners of DeFi are moving, by their own
+  // median growth — a category whose median is rising while the field
+  // falls is where the next launches gather.
+  function categoryMomentum() {
+    var cats = DATA.categories || [];
+    var rows = cats.map(function (c) {
+      return el('tr', { onclick: function () { state.category = c.category; state.page = 1; render(); } },
+        el('td', null, el('b', { text: c.category })),
+        el('td', { class: 'num', text: String(c.protocols) }),
+        el('td', { class: 'num ' + (c.median_growth !== null && c.median_growth >= 0 ? 'pos' : 'neg'), text: fmtPct(c.median_growth) }),
+        el('td', { class: 'num', text: fmtUsd(c.total_implied_usd) }),
+        el('td', null, el('button', { class: 'linklike', type: 'button', text: c.top_name, onclick: function (e) { e.stopPropagation(); openDetail(c.top_slug); } })));
+    });
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'Category momentum — where the value is moving' }),
+      el('p', { class: 'sub', text: 'Each category\u2019s median 7-day growth, from the snapshot\u2019s own figures. Select a row to filter the board to that category.' }),
+      el('div', { class: 'table-wrap' },
+        el('table', { class: 'cat-table' },
+          el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Rows' }), el('th', { scope: 'col', text: 'Median 7d' }), el('th', { scope: 'col', text: 'Total implied' }), el('th', { scope: 'col', text: 'Strongest row' }))),
+          el('tbody', null, rows))));
+  }
+
   function movers() {
     var top = DATA.rows.filter(function (r) { return r.change_7d !== null; }).sort(function (a, b) { return b.change_7d - a.change_7d; }).slice(0, 5);
     var nodes = [el('span', { class: 'movers-label', text: 'Fastest growers · 7d' })];
@@ -224,13 +295,18 @@
       el('option', { value: 'up', text: 'Growing (7d up)', selected: state.growth === 'up' ? 'selected' : null }),
       el('option', { value: 'down', text: 'Shrinking (7d down)', selected: state.growth === 'down' ? 'selected' : null }));
     growthSel.addEventListener('change', function () { state.growth = growthSel.value; state.page = 1; render(); });
+    var heatSel = el('select', { id: 'heat', 'aria-label': 'Filter by heat' },
+      el('option', { value: 'all', text: 'Any heat' }),
+      el('option', { value: 'warm', text: 'Warm or hotter (45+)', selected: state.heat === 'warm' ? 'selected' : null }),
+      el('option', { value: 'hot', text: 'Hot only (70+)', selected: state.heat === 'hot' ? 'selected' : null }));
+    heatSel.addEventListener('change', function () { state.heat = heatSel.value; state.page = 1; render(); });
     var tvlSel = el('select', { id: 'mintvl', 'aria-label': 'Minimum TVL' },
       [[0, 'Any TVL'], [1e7, 'TVL $10M+'], [5e7, 'TVL $50M+'], [1e8, 'TVL $100M+'], [1e9, 'TVL $1B+']].map(function (o) { return el('option', { value: String(o[0]), text: o[1], selected: state.minTvl === o[0] ? 'selected' : null }); }));
     tvlSel.addEventListener('change', function () { state.minTvl = Number(tvlSel.value); state.page = 1; render(); });
     var watch = el('input', { type: 'checkbox', id: 'watchonly', checked: state.watchOnly ? 'checked' : null });
     watch.addEventListener('change', function () { state.watchOnly = watch.checked; state.page = 1; render(); });
     var sortSel = el('select', { id: 'sort', 'aria-label': 'Sort by' },
-      [['implied', 'Implied value'], ['tvl', 'TVL'], ['growth', '7-day growth'], ['age', 'Age'], ['risk', 'Risk score'], ['name', 'Name']].map(function (o) { return el('option', { value: o[0], text: 'Sort: ' + o[1], selected: state.sort === o[0] ? 'selected' : null }); }));
+      [['implied', 'Implied value'], ['heat', 'Heat'], ['tvl', 'TVL'], ['growth', '7-day growth'], ['age', 'Age'], ['risk', 'Risk score'], ['name', 'Name']].map(function (o) { return el('option', { value: o[0], text: 'Sort: ' + o[1], selected: state.sort === o[0] ? 'selected' : null }); }));
     sortSel.addEventListener('change', function () { state.sort = sortSel.value; state.dir = state.sort === 'name' ? 1 : -1; render(); });
     var pre = el('button', { type: 'button', 'aria-pressed': state.tab === 'pre-token' ? 'true' : 'false', text: 'Pre-token', onclick: function () { state.tab = 'pre-token'; state.page = 1; render(); } });
     var live = el('button', { type: 'button', 'aria-pressed': state.tab === 'live' ? 'true' : 'false', text: 'Live token', onclick: function () { state.tab = 'live'; state.page = 1; render(); } });
@@ -239,6 +315,7 @@
       el('div', { class: 'field' }, el('label', { for: 'category', text: 'Category' }), select),
       el('div', { class: 'field' }, el('label', { for: 'chain', text: 'Chain' }), chainSel),
       el('div', { class: 'field' }, el('label', { for: 'growth', text: 'Growth' }), growthSel),
+      el('div', { class: 'field' }, el('label', { for: 'heat', text: 'Heat' }), heatSel),
       el('div', { class: 'field' }, el('label', { for: 'mintvl', text: 'Min TVL' }), tvlSel),
       el('div', { class: 'field' }, el('label', { for: 'sort', text: 'Sort' }), sortSel),
       el('label', { class: 'check', for: 'watchonly' }, watch, 'Watchlist only'),
@@ -254,13 +331,17 @@
     var cls = r.risk_band === 'High' ? 'high' : r.risk_band === 'Medium' ? 'med' : 'low';
     return el('span', { class: 'risk ' + cls, title: (r.risk_flags || []).join('; '), text: r.risk_band + ' ' + r.risk_score });
   }
+  function heatBadge(r) {
+    if (r.heat_score === undefined || r.heat_band === undefined) return el('span', { class: 'sub', text: 'n/a' });
+    return el('span', { class: 'heat ' + heatClass(r), title: 'Heat ' + r.heat_score + ' / 100: growth against its category median, youth, size and breadth', text: r.heat_band + ' ' + r.heat_score });
+  }
   function boardTable() {
     var list = sortedRows(filteredRows());
     if (list.length === 0) {
       return el('div', { class: 'panel' }, el('div', { class: 'empty' },
         el('h2', { text: 'No protocol matches that filter' }),
         el('p', { text: 'Clear the search or pick another category to see the board again.' }),
-        el('button', { class: 'button primary', type: 'button', text: 'Clear filters', onclick: function () { state.q = ''; state.category = 'all'; state.chain = 'all'; state.growth = 'all'; state.minTvl = 0; state.watchOnly = false; state.page = 1; writeHash(); render(); } })));
+        el('button', { class: 'button primary', type: 'button', text: 'Clear filters', onclick: function () { state.q = ''; state.category = 'all'; state.chain = 'all'; state.growth = 'all'; state.heat = 'all'; state.minTvl = 0; state.watchOnly = false; state.page = 1; writeHash(); render(); } })));
     }
     var pages = Math.max(1, Math.ceil(list.length / state.pageSize));
     if (state.page > pages) state.page = pages;
@@ -286,6 +367,7 @@
         el('td', null, el('div', { class: 'implied' },
           el('div', { class: 'bar-track', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) }))),
+        el('td', null, heatBadge(r)),
         el('td', null, riskBadge(r)),
         el('td', null, el('span', { class: 'status' + (r.watchlist ? ' watch' : ''), text: r.watchlist ? 'watchlist · no token' : 'no token' }))));
     });
@@ -297,9 +379,9 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model, risk flags and farm plan.' + (state.sandbox ? ' Sandbox is on: values below are recomputed live, not the board.json ranking.' : '') }),
+          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Heat is the early-warning view — growth against the category median, youth, size and breadth. Select a row for its model, heat, risk flags and farm plan.' + (state.sandbox ? ' Sandbox is on: values below are recomputed live, not the board.json ranking.' : '') }),
           el('thead', null, el('tr', null,
-            sortHeader('implied', 'Rank'), sortHeader('name', 'Protocol'), sortHeader('tvl', 'TVL'), sortHeader('growth', '7d'), sortHeader('age', 'Age'), sortHeader('implied', 'Implied value'), sortHeader('risk', 'Risk'), el('th', { scope: 'col', text: 'Token' }))),
+            sortHeader('implied', 'Rank'), sortHeader('name', 'Protocol'), sortHeader('tvl', 'TVL'), sortHeader('growth', '7d'), sortHeader('age', 'Age'), sortHeader('implied', 'Implied value'), sortHeader('heat', 'Heat'), sortHeader('risk', 'Risk'), el('th', { scope: 'col', text: 'Token' }))),
           tbody)),
       el('div', { class: 'pager' }, prev, el('span', { text: 'Page ' + state.page + ' of ' + pages + ' · rows ' + (start + 1) + '–' + Math.min(start + state.pageSize, list.length) + ' of ' + list.length }), next, sizeSel));
   }
@@ -321,6 +403,7 @@
           el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Status' }), el('th', { scope: 'col', text: 'Protocol' }), el('th', { scope: 'col', text: 'TVL' }), el('th', { scope: 'col', text: '7d' }), el('th', { scope: 'col', text: 'Market cap' }), el('th', { scope: 'col', text: 'Token' }))),
           tbody)));
   }
+
   function modelPanel() {
     var m = DATA.model;
     var baseOut = el('output', { text: String(state.base) });
@@ -335,6 +418,8 @@
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' }, 'implied = round( tvl_usd x ' + m.base_multiple + ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + 0.02 x min(chains - 1, 5)) )'),
       el('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed — how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. Breadth rewards protocols live on several chains, at most +10%.' }),
+      el('h2', { text: 'Heat — the early-warning view' }),
+      el('p', { class: 'sub', text: 'Heat (0–100) is scored from the same snapshot, never from a list of names: growth against the protocol\u2019s own category median (up to 40), youth (up to 20), size against the $' + Math.round(DATA.floor_usd / 1e6) + 'M floor (up to 15), chain breadth (up to 10) and strong absolute growth (up to 15). Hot is 70+, Warm 45+, Cool 20+. Heat never moves the implied value or the rank — it is the radar\u2019s way of saying which launches below the floor are warming up first.' }),
       el('h2', { text: 'Model sandbox — replay the ranking with your own weights' }),
       el('div', { class: 'sandbox' },
         el('div', null, el('label', null, 'Base multiple ', baseOut), baseSlider),
@@ -342,7 +427,7 @@
         el('div', null, el('label', { text: 'Back to the board' }), reset)),
       state.sandbox ? el('p', { class: 'sandbox-note', text: 'Sandbox on: base ' + state.base + ', growth weight ' + state.gw + '. The board re-ranks live above; board.json keeps the published model.' }) : null,
       el('h2', { text: 'What risk means here — read this first' }),
-      el('p', { class: 'method', text: 'Risk (0–100) is a heuristic over the snapshot alone: a falling TVL, a very young listing, a single chain, a small TVL. The snapshot carries no contract audit, no holder data and no honeypot test, so a Low risk badge is not a safety verdict and never a claim that a token is safe. Implied value is the model\u2019s claim, never a price — and a protocol "records no token" in DefiLlama\u2019s record, which is not proof it has none.' }));
+      el('p', { class: 'method', text: 'Risk (0–100) is a heuristic over the snapshot alone: a falling TVL, growth far below its category median, a very young listing, a single chain, a small TVL. The snapshot carries no contract audit, no holder data and no honeypot test, so a Low risk badge is not a safety verdict and never a claim that a token is safe. Implied value is the model\u2019s claim, never a price — and a protocol "records no token" in DefiLlama\u2019s record, which is not proof it has none.' }));
   }
 
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
@@ -355,6 +440,10 @@
     dialog.textContent = '';
     var steps = farmSteps(row);
     var v = impliedOf(row, modelOf());
+    var diff = heatDiff(row);
+    var catLine = diff === null
+      ? 'No 7-day growth is reported for this protocol, so its heat leans on youth, size and breadth instead.'
+      : 'It is growing ' + fmtSigned(diff, 1) + ' against the ' + (row.category || 'its category') + ' median of ' + fmtPct(row.category_median_growth) + ' — ' + (diff >= 0 ? 'ahead of its own corner of DeFi.' : 'behind its own corner of DeFi.');
     dialog.appendChild(el('div', { class: 'detail-head' },
       el('div', null,
         el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (row.watchlist ? ' · ★ Watchlist' : '') }),
@@ -374,11 +463,16 @@
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(v.implied) + (v.implied === row.implied_value_usd ? ', the same number board.json carries.' : ' — the sandbox is on, so this differs from board.json on purpose.') + ' This is an estimate, not a price.' })));
     dialog.appendChild(el('section', { class: 'detail-section' },
+      el('h3', { text: 'Heat — is this launch warming up?' }),
+      el('p', null, heatBadge(row), el('span', { class: 'sub', text: '  Score ' + (row.heat_score === undefined ? 'n/a' : row.heat_score + ' / 100') + '. ' + catLine })),
+      el('p', { class: 'sub', text: 'Heat comes from the snapshot alone: growth against the category median, youth, size against the floor, breadth, and absolute growth. It never changes the implied value — it says how early this one looks.' })));
+    dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Risk flags — snapshot heuristics only' }),
       el('p', null, riskBadge(row), el('span', { class: 'sub', text: '  Score ' + row.risk_score + ' / 100. Not a honeypot or rug test: the snapshot has no audit or holder data.' })),
       el('ul', { class: 'flags' }, (row.risk_flags || []).map(function (f) { return el('li', { text: f }); }))));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
+      el('p', { class: 'sub', text: planTotals(row) }),
       el('ol', { class: 'steps' }, steps.map(function (s) {
         var at = s.indexOf(' Cost: ');
         var action = at >= 0 ? s.slice(0, at) : s;
@@ -394,7 +488,9 @@
     var shell = el('div', { class: 'shell' });
     shell.appendChild(header());
     shell.appendChild(lede());
+    shell.appendChild(earlyRadar());
     shell.appendChild(charts());
+    shell.appendChild(categoryMomentum());
     shell.appendChild(movers());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());

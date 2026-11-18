@@ -1,13 +1,16 @@
-// Token Radar radar-2 — a token-radar-01 entry (Node 22, standard library only).
+// Token Radar radar-3 — a token-radar-01 entry (Node 22, standard library only).
 //
-// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// rankable pre-token protocol with the model in lib/model.ts (198 rows here: the 40 watchlist protocols
-// plus every other pre-token protocol, at any TVL), writes the ranked board to /output/board.json, and
-// copies this repository's dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json,
-// the summary the judge reads, with the vendored make.fun library.
+// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>),
+// scores every rankable pre-token protocol with the model in lib/model.ts — 198 rows
+// here: the 40 watchlist protocols plus every other pre-token protocol, at any TVL —
+// writes the ranked board to /output/board.json, and copies this repository's
+// dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json, the
+// summary the judge reads, with the vendored make.fun library.
 //
-// The dashboard is a static page, no framework and no network: dashboard/index.html, dashboard/app.css
-// and dashboard/app.js read /output/data.js, which this program writes from the same board.
+// The dashboard is a static page, no framework and no network: dashboard/index.html,
+// dashboard/app.css and dashboard/app.js read /output/data.js, which this program
+// writes from the same board. The page also shows the radar's second signal, heat:
+// growth against each protocol's own category median, youth, size and breadth.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -24,6 +27,8 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 const TEXT_MAX_BYTES = 65_536;
 const SCREENSHOT_CAPS = { max: 4, max_bytes: 524_288 };
 const IMAGE_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
+/** The dossier guidance: a screenshot past this size still passes the gate, but three at the cap do not fit it well. */
+const SCREENSHOT_WARN_BYTES = 350_000;
 
 /** --name <value> out of the arguments, or the fallback. */
 function arg(name: string, fallback: string): string {
@@ -79,12 +84,23 @@ for (const name of shots) {
     process.stderr.write(`token radar: screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters\n`);
     process.exit(1);
   }
+  const size = statSync(join(here, 'screenshots', name)).size;
+  if (size > SCREENSHOT_WARN_BYTES) {
+    process.stderr.write(`token radar: warning: screenshots/${name} is ${size} bytes, past the ${SCREENSHOT_WARN_BYTES} guidance — the dossier still fits, but keep it under the cap\n`);
+  }
 }
 
 // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
+/** The hottest early rows, for the build log: the launches below the floor that are warming up. */
+const hotEarly = board
+  .filter((r) => !r.watchlist)
+  .sort((a, b) => b.heat_score - a.heat_score)
+  .slice(0, 5);
+
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+    `token radar: hottest early rows by heat: ${hotEarly.map((r) => `${r.name} ${r.heat_score}`).join(', ')}\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
